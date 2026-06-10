@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 from typing import List, Tuple
 
@@ -67,6 +68,8 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
         logger.debug("Search %s: got %d pages with content", search_id, len(texts))
 
         combined_text = "\n\n---\n\n".join(texts)
+        url_pattern = r"https?://\S+|www\.\S+"
+        combined_text = re.sub(url_pattern, "", combined_text)
         prompt = (
             "Ты — анализатор поставщиков. Извлеки из текстов информацию о поставщиках продуктов питания, ингредиентов, упаковки. "
             "Для каждого найденного поставщика создай объект с полями: name, contacts, website, source (URL источника), price, min_order, certificates, delivery_conditions, region_covered. "
@@ -74,7 +77,8 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
             f"Тексты:\n{combined_text}"
         )
 
-        result: SupplierCardList = await structured_llm.ainvoke(prompt)
+        # TODO: искусственное ограничение но пойдет)
+        result: SupplierCardList = await structured_llm.ainvoke(prompt[:150_000])
         logger.info(
             "Search %s: LLM extracted %d supplier(s)", search_id, len(result.suppliers)
         )
@@ -103,7 +107,6 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
                 card.source = search_data[0].url if search_data else None
 
             score = _compute_score(card)
-            # Verify that the comment field is indeed present in the card schema
             card_json = card.model_dump_json(exclude={"comment"})
             scored_cards.append((score, card_json))
 
