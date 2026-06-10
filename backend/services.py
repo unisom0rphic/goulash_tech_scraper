@@ -20,7 +20,6 @@ llm = ChatOpenAI(
     model=settings.openrouter_model,
     base_url="https://openrouter.ai/api/v1",
     temperature=0,
-    model_kwargs={"response_format": {"type": "json_object"}},
 )
 
 structured_llm = llm.with_structured_output(SupplierCardList)
