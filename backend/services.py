@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -7,6 +8,7 @@ from typing import List, Tuple
 import redis.asyncio as redis
 from cache import cache_search_id, get_cached_search_id, invalidate_cache
 from firecrawl import FirecrawlApp
+from langchain.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from schemas import SearchRequest, SupplierCard, SupplierCardList
 from settings import settings
@@ -42,7 +44,6 @@ def _compute_score(card: SupplierCard) -> float:
 
 
 async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Redis):
-    """Perform the actual search, process results and store them in Redis."""
     logger.info(
         "Starting search %s for query '%s' region '%s'",
         search_id,
@@ -55,38 +56,94 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
             limit=req.limit,
             scrape_options={"formats": ["markdown"], "onlyMainContent": True},
         )
-
         search_data = search_result.web
         if not search_data:
             raise ValueError("Firecrawl returned no results")
         texts = [item.markdown for item in search_data if item.markdown]
-
         if not texts:
             raise ValueError("No page content to analyze")
 
         logger.debug("Search %s: got %d pages with content", search_id, len(texts))
-
         combined_text = "\n\n---\n\n".join(texts)
-        # links removal
         url_pattern = r"https?://\S+|www\.\S+"
         combined_text = re.sub(url_pattern, "", combined_text)
+
         prompt = (
             "Ты — анализатор поставщиков. Извлеки из текстов информацию о поставщиках продуктов питания, ингредиентов, упаковки. "
-            "Для каждого найденного поставщика создай объект с полями: name, contacts, website, source (URL источника), price, min_order, certificates, delivery_conditions, region_covered. "
+            "Для каждого найденного поставщика создай объект с полями: name (строка), contacts (строка — все контакты через запятую), "
+            "website (строка или null), source (строка URL или null), price (строка или null), min_order (строка или null), "
+            "certificates (массив строк, каждый сертификат отдельным элементом), "
+            "delivery_conditions (строка или null), region_covered (строка или null). "
             "Если информации нет, оставляй поле null. Не придумывай данные.\n\n"
-            "Ответ верни строго как JSON-объект с единственным ключом 'suppliers', который содержит массив таких объектов.\n\n"
+            "Ответь СТРОГО JSON-объектом с ключом 'suppliers' — массивом таких объектов. "
+            "JSON оберни в ```json ... ```\n\n"
             f"Тексты:\n{combined_text}"
         )
 
-        # TODO: искусственное ограничение но пойдет)
-        result: SupplierCardList = await structured_llm.ainvoke(prompt[:150_000])
+        safe_prompt = prompt[:120_000]
+        messages = [
+            SystemMessage(
+                content="Ты — помощник, который всегда возвращает только JSON без лишнего текста."
+            ),
+            HumanMessage(content=safe_prompt),
+        ]
+        response = await llm.ainvoke(messages)
+        response_text = response.content.strip()
+
+        # Достаём JSON из маркдаун-блока или сырого текста
+        json_match = re.search(
+            r"```(?:json)?\s*\n?(.*?)\n?```", response_text, re.DOTALL
+        )
+        if json_match:
+            json_str = json_match.group(1).strip()
+        else:
+            json_str = response_text
+        start = json_str.find("{")
+        end = json_str.rfind("}")
+        if start != -1 and end != -1:
+            json_str = json_str[start : end + 1]
+        data = json.loads(json_str)
+
+        # === Нормализация сырых данных под схему ===
+        raw_suppliers = data.get("suppliers", [])
+        if not isinstance(raw_suppliers, list):
+            raise ValueError("JSON не содержит массив suppliers")
+
+        normalized = []
+        for item in raw_suppliers:
+            # contacts: если список -> объединяем через "; ", если None -> пустая строка
+            contacts = item.get("contacts")
+            if isinstance(contacts, list):
+                contacts = "; ".join(str(c) for c in contacts if c)
+            elif contacts is None:
+                contacts = ""
+            item["contacts"] = str(contacts)
+
+            # certificates: если строка -> список из одного элемента, если None -> пустой список
+            certs = item.get("certificates")
+            if isinstance(certs, str):
+                item["certificates"] = [certs]
+            elif certs is None or not isinstance(certs, list):
+                item["certificates"] = []
+            else:
+                # Оставляем список как есть
+                item["certificates"] = certs
+
+            # website, source и т.п. оставляем как есть (будут проверены моделью)
+            normalized.append(item)
+
+        # Теперь валидируем
+        result = SupplierCardList.model_validate({"suppliers": normalized})
+
         logger.info(
             "Search %s: LLM extracted %d supplier(s)", search_id, len(result.suppliers)
         )
+        logger.debug("Model output: %s", response_text)
 
         if not result.suppliers:
             raise ValueError("LLM found no suppliers")
 
+        # Дедупликация и подсчёт очков (код без изменений)
         def _normalize_certificates(card: SupplierCard) -> SupplierCard:
             if isinstance(card.certificates, str):
                 card.certificates = [card.certificates]
@@ -94,7 +151,6 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
                 card.certificates = []
             return card
 
-        # Deduplication + normalization
         unique_cards: dict[tuple, SupplierCard] = {}
         for card in result.suppliers:
             card = _normalize_certificates(card)
