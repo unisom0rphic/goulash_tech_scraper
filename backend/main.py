@@ -10,7 +10,7 @@ from schemas import SearchRequest, SearchResponse, SupplierCard
 from services import search_suppliers
 from settings import settings
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("supplier_search")
 
 app = FastAPI(title="Supplier Search")

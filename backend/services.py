@@ -67,12 +67,14 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
         logger.debug("Search %s: got %d pages with content", search_id, len(texts))
 
         combined_text = "\n\n---\n\n".join(texts)
+        # links removal
         url_pattern = r"https?://\S+|www\.\S+"
         combined_text = re.sub(url_pattern, "", combined_text)
         prompt = (
             "Ты — анализатор поставщиков. Извлеки из текстов информацию о поставщиках продуктов питания, ингредиентов, упаковки. "
             "Для каждого найденного поставщика создай объект с полями: name, contacts, website, source (URL источника), price, min_order, certificates, delivery_conditions, region_covered. "
             "Если информации нет, оставляй поле null. Не придумывай данные.\n\n"
+            "Ответ верни строго как JSON-объект с единственным ключом 'suppliers', который содержит массив таких объектов.\n\n"
             f"Тексты:\n{combined_text}"
         )
 
@@ -103,7 +105,13 @@ async def _do_search(search_id: str, req: SearchRequest, redis_client: redis.Red
         scored_cards: List[Tuple[float, str]] = []
         for _, card in enumerate(unique_cards.values()):
             if not card.source and search_data:
-                card.source = search_data[0].url if search_data else None
+                first = search_data[0]
+                source = getattr(first, "url", None)
+                if not source:
+                    metadata = getattr(first, "metadata", None)
+                    if metadata:
+                        source = getattr(metadata, "url", None)
+                card.source = source if source else None
 
             score = _compute_score(card)
             card_json = card.model_dump_json(exclude={"comment"})
@@ -149,9 +157,6 @@ async def search_suppliers(req: SearchRequest, redis_client: redis.Redis) -> str
                     "Cache hit but no results for %s, invalidating", cached_id
                 )
                 await invalidate_cache(redis_client, req.query, req.region, req.limit)
-        elif status == "processing":
-            logger.info("Cache hit: search %s is still processing", cached_id)
-            return cached_id
         await invalidate_cache(redis_client, req.query, req.region, req.limit)
 
     search_id = str(uuid.uuid4())
