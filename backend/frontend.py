@@ -131,28 +131,60 @@ if st.session_state.status == "completed":
         # Таблица с результатами
         st.subheader(f"Найдено {len(results)} поставщиков")
 
-        # Генерируем заголовки
-        cols = st.columns([3, 3, 2, 2, 2, 1, 1])
+        # Генерируем заголовки с нужными пропорциями колонок
+        cols = st.columns(
+            [2.5, 2.5, 2, 1.2, 1.2, 2, 2, 2, 2, 0.8, 0.8],
+            gap="small",
+        )
         cols[0].write("**Название**")
         cols[1].write("**Контакты**")
-        cols[2].write("**Цена**")
-        cols[3].write("**Сертификаты**")
-        cols[4].write("**Комментарий**")
-        cols[5].write("**Рейтинг**")
-        cols[6].write("**Действие**")
+        cols[2].write("**Сайт**")
+        cols[3].write("**Цена**")
+        cols[4].write("**Мин. заказ**")
+        cols[5].write("**Сертификаты**")
+        cols[6].write("**Доставка**")
+        cols[7].write("**Регион**")
+        cols[8].write("**Комментарий**")
+        cols[9].write("**Рейтинг**")
+        cols[10].write("**Действие**")
 
         for i, card in enumerate(results):
-            row = st.columns([3, 3, 2, 2, 2, 1, 1])
+            row = st.columns(
+                [2.5, 2.5, 2, 1.2, 1.2, 2, 2, 2, 2, 0.8, 0.8],
+                gap="small",
+            )
+            # Название
             row[0].write(card.get("name", ""))
-            row[1].write(card.get("contacts", ""))
-            row[2].write(card.get("price") or "—")
+            # Контакты
+            row[1].write(
+                card.get("contacts", "")[:80] + "…"
+                if len(card.get("contacts", "")) > 80
+                else card.get("contacts", "")
+            )
+            # Сайт (обрезаем протокол для краткости)
+            website = card.get("website") or ""
+            if website.startswith("http://"):
+                website = website[7:]
+            elif website.startswith("https://"):
+                website = website[8:]
+            row[2].write(website[:40] + "…" if len(website) > 40 else website)
+            # Цена
+            row[3].write(card.get("price") or "—")
+            # Минимальный заказ
+            row[4].write(card.get("min_order") or "—")
+            # Сертификаты (список -> строка)
             certs = ", ".join(card.get("certificates", [])) or "—"
-            row[3].write(certs[:50] + "…" if len(certs) > 50 else certs)
-            row[4].write(card.get("comment") or "")
-            row[5].write(f"{scores[i]:.2f}" if i < len(scores) else "—")
-
-            # Кнопка для редактирования комментария
-            if row[6].button("✏️", key=f"edit_btn_{card['id']}"):
+            row[5].write(certs[:60] + "…" if len(certs) > 60 else certs)
+            # Условия доставки
+            row[6].write(card.get("delivery_conditions") or "—")
+            # Регион покрытия
+            row[7].write(card.get("region_covered") or "—")
+            # Комментарий
+            row[8].write(card.get("comment") or "")
+            # Рейтинг
+            row[9].write(f"{scores[i]:.2f}" if i < len(scores) else "—")
+            # Кнопка редактирования комментария
+            if row[10].button("✏️", key=f"edit_btn_{card['id']}"):
                 st.session_state["edit_target"] = {
                     "search_id": st.session_state.search_id,
                     "result_id": card["id"],
