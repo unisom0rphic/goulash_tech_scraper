@@ -39,19 +39,25 @@ $$
 FIRECRAWL_API_KEY=fc-...
 OPENROUTER_KEY=sk-...
 OPENROUTER_MODEL=...
+REDIS_URL=...
+API_BASE=...  # адрес API бэкенда, при локальном развертывании http://localhost/8000
 ```
 
 ### Запуск
-Убедитесь, что Redis запущен и работает на 6379 порте.
+Убедитесь, что Redis запущен и работает на 6379 порте.  
 ```bash
 docker run -d -p 6379:6379 redis
 ```
 ```bash
 cd backend
 python -m fastapi dev main.py
-cd ../frontend
-npm run dev -- --open
 ```
-*Примечание: для запуска в терминале Windows (НЕ CMD) можно использовать `start.bat` в корне проекта (выполняет те же самые команды)*
+В другом терминале:  
+```bash
+cd frontend
+python -m streamlit run frontend.py
+```
+Интерфейс будет доступен на *8501* порте в браузере    
+
 
 
